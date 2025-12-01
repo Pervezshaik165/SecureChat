@@ -16,7 +16,7 @@ localPort = 5000
 externalPort = 80
 
 [[ports]]
-localPort = 34707
+localPort = 39955
 externalPort = 3000
 
 [env]
@@ -49,4 +49,4 @@ mockupState = "FULLSTACK"
 [userenv]
 
 [userenv.shared]
-MONGODB_URI = "mongodb+srv://heenakaf143:${MONGODB_PASSWORD}@cluster0.fl5jr.mongodb.net/securechat?retryWrites=true&w=majority"
+MONGODB_URI = "mongodb+srv://heenakaf143:MONGOPASS@cluster0.fl5jr.mongodb.net/securechat?retryWrites=true&w=majority"
