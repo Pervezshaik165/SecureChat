@@ -41,3 +41,8 @@ waitForPort = 5000
 
 [agent]
 mockupState = "FULLSTACK"
+
+[userenv]
+
+[userenv.shared]
+MONGODB_URI = "mongodb+srv://heenakaf143:${MONGODB_PASSWORD}@cluster0.fl5jr.mongodb.net/securechat?retryWrites=true&w=majority"

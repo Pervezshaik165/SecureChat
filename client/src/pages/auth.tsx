@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { db } from "@/lib/mock-db";
+import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -38,7 +38,8 @@ export default function AuthPage() {
   async function onLogin(values: z.infer<typeof authSchema>) {
     setIsLoading(true);
     try {
-      await db.login(values.email, values.password);
+      const user = await api.login(values.email, values.password);
+      localStorage.setItem('currentUser', JSON.stringify(user));
       toast({ title: "Welcome back!", description: "Successfully logged in." });
       setLocation("/chat");
     } catch (error) {
@@ -56,9 +57,8 @@ export default function AuthPage() {
     if (!values.username) return;
     setIsLoading(true);
     try {
-      await db.register(values.username, values.email, values.password);
-      // Auto login after register
-      await db.login(values.email, values.password);
+      const user = await api.register(values.username, values.email, values.password);
+      localStorage.setItem('currentUser', JSON.stringify(user));
       toast({ title: "Account created", description: "Welcome to SecureChat!" });
       setLocation("/chat");
     } catch (error) {
