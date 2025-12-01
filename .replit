@@ -49,4 +49,4 @@ mockupState = "FULLSTACK"
 [userenv]
 
 [userenv.shared]
-MONGODB_URI = "mongodb://localhost:27017/securechat"
+MONGODB_URI = "mongodb+srv://heenakaf143:MONGOPASS@cluster0.fl5jr.mongodb.net/securechat?retryWrites=true&w=majority"
