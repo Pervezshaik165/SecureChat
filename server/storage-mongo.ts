@@ -2,11 +2,13 @@ import mongoose from 'mongoose';
 import { User, Message, type IUser, type IMessage } from "@shared/schema";
 import bcrypt from 'bcryptjs';
 
-// Build MongoDB URI with password
-let MONGODB_URI = process.env.MONGODB_URI || '';
+// Build MongoDB URI with password (for Atlas)
+// For local MongoDB, just use the MONGODB_URI directly
+let MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/securechat';
 const MONGODB_PASSWORD = process.env.MONGODB_PASSWORD || '';
 
-if (MONGODB_URI.includes('MONGOPASS')) {
+// Only replace password if it's an Atlas URI with placeholder
+if (MONGODB_URI.includes('MONGOPASS') && MONGODB_PASSWORD) {
   MONGODB_URI = MONGODB_URI.replace('MONGOPASS', encodeURIComponent(MONGODB_PASSWORD));
 }
 
