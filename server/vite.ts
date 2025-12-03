@@ -4,6 +4,7 @@ import { type Server } from "http";
 import viteConfig from "../vite.config";
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from 'url';
 import { nanoid } from "nanoid";
 
 const viteLogger = createLogger();
@@ -15,8 +16,11 @@ export async function setupVite(server: Server, app: Express) {
     allowedHosts: true as const,
   };
 
+  // support sync or async config exports from vite.config
+  const resolvedConfig = typeof viteConfig === 'function' ? await (viteConfig as any)() : viteConfig;
+
   const vite = await createViteServer({
-    ...viteConfig,
+    ...resolvedConfig,
     configFile: false,
     customLogger: {
       ...viteLogger,
@@ -35,8 +39,9 @@ export async function setupVite(server: Server, app: Express) {
     const url = req.originalUrl;
 
     try {
+      const __dirname = path.dirname(fileURLToPath(import.meta.url));
       const clientTemplate = path.resolve(
-        import.meta.dirname,
+        __dirname,
         "..",
         "client",
         "index.html",

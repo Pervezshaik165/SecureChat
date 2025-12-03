@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: encrypted-chat
+    env: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: MONGODB_URI
+        sync: false  # You'll set this in Render dashboard
+      - key: MONGODB_PASSWORD
+        sync: false  # Optional, only if using MongoDB Atlas with password
+

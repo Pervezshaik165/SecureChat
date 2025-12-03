@@ -5,9 +5,12 @@
   "license": "MIT",
   "scripts": {
     "dev:client": "vite dev --port 5000",
-    "dev": "NODE_ENV=development tsx server/index.ts",
+    "dev": "npm run preopt && cross-env NODE_ENV=development tsx server/index.ts",
+    "dev:fast": "cross-env DEV_FAST=1 NODE_ENV=development tsx server/index.ts",
+    "dev:all": "concurrently -k \"npm:dev:fast\" \"npm:dev:client\"",
+    "preopt": "vite --clearScreen=false optimize",
     "build": "tsx script/build.ts",
-    "start": "NODE_ENV=production node dist/index.cjs",
+    "start": "cross-env NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
     "db:push": "drizzle-kit push"
   },
@@ -84,7 +87,9 @@
     "wouter": "^3.3.5",
     "ws": "^8.18.0",
     "zod": "^3.25.76",
-    "zod-validation-error": "^3.4.0"
+    "zod-validation-error": "^3.4.0",
+    "dotenv": "^16.1.4",
+    "jsonwebtoken": "^9.0.2"
   },
   "devDependencies": {
     "@replit/vite-plugin-cartographer": "^0.4.4",
@@ -100,6 +105,7 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@types/ws": "^8.5.13",
+    "@types/jsonwebtoken": "^9.0.7",
     "@vitejs/plugin-react": "^5.0.4",
     "autoprefixer": "^10.4.21",
     "drizzle-kit": "^0.31.4",
@@ -107,6 +113,8 @@
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.20.5",
+    "cross-env": "^7.0.3",
+    "concurrently": "^8.2.0",
     "typescript": "5.6.3",
     "vite": "^7.1.9"
   },

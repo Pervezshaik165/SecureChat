@@ -31,6 +31,8 @@ export default function ChatPage() {
   const { toast } = useToast();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [contacts, setContacts] = useState<User[]>([]);
+  const currentUserRef = useRef<User | null>(null);
+  const contactsRef = useRef<User[]>([]);
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState("");
@@ -39,6 +41,21 @@ export default function ChatPage() {
   const [isSearching, setIsSearching] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const socketRef = useRef<ReturnType<typeof initSocket> | null>(null);
+  const pendingStatusRef = useRef<Record<string, 'sent' | 'delivered' | 'read'>>({});
+
+  // Helper to keep contactsRef in sync whenever we update contacts state
+  const updateContacts = (updater: ((prev: User[]) => User[]) | User[]) => {
+    if (typeof updater === 'function') {
+      setContacts(prev => {
+        const next = (updater as (prev: User[]) => User[])(prev);
+        contactsRef.current = next;
+        return next;
+      });
+    } else {
+      contactsRef.current = updater;
+      setContacts(updater);
+    }
+  };
 
   // Initialize
   useEffect(() => {
@@ -50,27 +67,164 @@ export default function ChatPage() {
 
     const user = JSON.parse(userStr) as User;
     setCurrentUser(user);
+    currentUserRef.current = user;
     loadContacts(user._id);
 
     // Initialize Socket.io
     const socket = initSocket();
     socketRef.current = socket;
 
-    socket.emit('register_user', user._id);
+    // Wait for socket to connect before registering
+    const registerUser = () => {
+      if (socket.connected) {
+        console.log('Socket connected, registering user:', user._id);
+        socket.emit('register_user', user._id);
+      } else {
+        console.log('Socket not connected, waiting...');
+        socket.once('connect', () => {
+          console.log('Socket connected, registering user:', user._id);
+          socket.emit('register_user', user._id);
+        });
+      }
+    };
+    
+    registerUser();
+    
+    // Also try to register on reconnect
+    socket.on('reconnect', () => {
+      console.log('Socket reconnected, re-registering user');
+      registerUser();
+    });
 
-    socket.on('receive_message', (message: Message) => {
-      setMessages(prev => [...prev, message]);
-      scrollToBottom();
+    socket.on('receive_message', async (message: Message) => {
+      console.log('[socket] receive_message received:', message._id);
+      const me = currentUserRef.current;
+      const currentContacts = contactsRef.current;
+
+      // If the incoming message sender is not me, ensure the sender is in contacts
+      if (message.senderId !== me?._id) {
+        const exists = currentContacts.find(c => c._id === message.senderId);
+        if (!exists) {
+          try {
+            const user = await api.getUser(message.senderId);
+            updateContacts(prev => {
+              // avoid duplicates
+              if (prev.find(p => p._id === user._id)) return prev;
+              return [user, ...prev];
+            });
+          } catch (err) {
+            console.error('Failed to fetch sender for incoming message', err);
+          }
+        }
+      }
+
+      // Append incoming message and scroll. Use functional update to avoid stale state.
+      setMessages(prev => {
+        // Check if message already exists to avoid duplicates
+        if (prev.find(m => m._id === message._id)) {
+          console.log('Message already in list, skipping');
+          return prev;
+        }
+        console.log('Adding received message to list');
+        return [...prev, message];
+      });
+      
+      // Handle unread count and read status
+      const senderId = message.senderId;
+      const currentUserId = currentUserRef.current?._id;
+      const isSelected = senderId === selectedContactId;
+      
+      // This is a message received by current user (receiver)
+      if (senderId !== currentUserId) {
+        if (!isSelected) {
+          // Chat with sender is NOT open - increment unread count for receiver
+          console.log('Incrementing unread count for', senderId);
+          updateContacts(prev => prev.map(c => {
+            if (c._id === senderId) {
+              const newCount = (c.unreadCount || 0) + 1;
+              console.log('New unread count:', newCount);
+              return { ...c, unreadCount: newCount };
+            }
+            return c;
+          }));
+        } else {
+          // Chat with sender IS open - mark message as read immediately
+          // This will show blue ticks to the sender
+          console.log('Chat is open, marking message as read');
+          try {
+            if (socketRef.current?.connected) {
+              socketRef.current.emit('message_read', { 
+                messageId: message._id, 
+                senderId: message.senderId 
+              });
+            }
+          } catch (err) {
+            console.error('Failed to emit message_read', err);
+          }
+          // Update local message status to 'read' (blue ticks for sender)
+          setMessages(prev => prev.map(m => 
+            m._id === message._id 
+              ? { ...m, status: 'read' as const } 
+              : m
+          ));
+        }
+      }
+      setTimeout(() => scrollToBottom(), 100);
+    });
+
+    // When the server acknowledges a sent message, replace temp message or append it
+    socket.on('message_sent', (message: Message) => {
+      console.log('[socket] message_sent received for', message._id);
+      setMessages(prev => {
+        // Remove any temp messages
+        const filtered = prev.filter(m => !m._id.startsWith('temp-'));
+        
+        // Check if message already exists (avoid duplicates)
+        if (filtered.find(m => m._id === message._id)) {
+          console.log('Message already exists, skipping');
+          return filtered;
+        }
+        
+        // apply any pending status updates for this message
+        const pending = pendingStatusRef.current[message._id];
+        const withStatus = pending ? { ...message, status: pending } : message;
+        // remove pending entry once applied
+        if (pending) delete pendingStatusRef.current[message._id];
+        
+        // Ensure status is 'sent' (grey ticks) until receiver opens chat
+        const finalMessage = { 
+          ...withStatus, 
+          status: (withStatus.status === 'read' ? 'read' : 'sent') as 'sent' | 'read'
+        };
+        
+        console.log('Adding confirmed message:', finalMessage._id);
+        return [...filtered, finalMessage];
+      });
+      setTimeout(() => scrollToBottom(), 100);
     });
 
     socket.on('message_status_update', ({ messageId, status }: { messageId: string, status: string }) => {
-      setMessages(prev => prev.map(m => 
-        m._id === messageId ? { ...m, status: status as 'sent' | 'delivered' | 'read' } : m
-      ));
+      console.log('[socket] message_status_update', messageId, status);
+      setMessages(prev => {
+        const found = prev.find(m => m._id === messageId);
+        if (found) {
+          // Update message status (this will show blue ticks when status is 'read')
+          console.log('Updating message status to', status);
+          return prev.map(m => 
+            m._id === messageId 
+              ? { ...m, status: status as 'sent' | 'read' } 
+              : m
+          );
+        }
+        // message not present yet, store pending status
+        console.log('Message not found, storing pending status');
+        pendingStatusRef.current[messageId] = status as 'sent' | 'read';
+        return prev;
+      });
     });
 
     socket.on('user_online', (userId: string) => {
-      setContacts(prev => prev.map(c => 
+      updateContacts(prev => prev.map(c => 
         c._id === userId ? { ...c, isOnline: true } : c
       ));
     });
@@ -80,14 +234,44 @@ export default function ChatPage() {
     });
 
     return () => {
-      disconnectSocket();
+      // Clean up socket event listeners
+      socket.off('receive_message');
+      socket.off('message_sent');
+      socket.off('message_status_update');
+      socket.off('user_online');
+      socket.off('user_typing');
+      socket.off('connect');
+      socket.off('reconnect');
+      // Don't disconnect socket completely, just remove listeners
+      // disconnectSocket();
     };
-  }, [location, setLocation]);
+  }, [location, setLocation, selectedContactId]);
 
   // Refresh messages when selected contact changes
   useEffect(() => {
     if (selectedContactId && currentUser) {
+      // Immediately clear unread count for this contact (receiver sees number disappear)
+      updateContacts(prev => prev.map(c => 
+        c._id === selectedContactId 
+          ? { ...c, unreadCount: 0 } 
+          : c
+      ));
+      
+      // Fetch messages and mark them as read
       refreshMessages();
+      
+      // Tell server to mark all messages from this contact as read
+      // This will trigger blue ticks for the sender
+      setTimeout(() => {
+        try {
+          socketRef.current?.emit('mark_contact_read', { 
+            userId: currentUser._id, 
+            contactId: selectedContactId 
+          });
+        } catch (err) {
+          console.error('Failed to emit mark_contact_read', err);
+        }
+      }, 200);
     }
   }, [selectedContactId]);
 
@@ -100,7 +284,15 @@ export default function ChatPage() {
   const loadContacts = async (userId: string) => {
     try {
       const contactsList = await api.getContacts(userId);
-      setContacts(contactsList);
+      // dedupe by _id in case server or previous client state includes duplicates
+      const unique = contactsList
+        .filter((c, idx) => contactsList.findIndex(x => x._id === c._id) === idx)
+        .map(c => ({
+          ...c,
+          unreadCount: c.unreadCount || 0  // Keep count even if 0, we'll hide it in UI
+        }));
+
+      updateContacts(unique);
     } catch (error) {
       console.error("Failed to load contacts:", error);
     }
@@ -109,6 +301,7 @@ export default function ChatPage() {
   const refreshMessages = async () => {
     if (!selectedContactId || !currentUser) return;
     try {
+      // Fetch messages - server will automatically mark received messages as read
       const msgs = await api.getMessages(currentUser._id, selectedContactId);
       setMessages(msgs);
       scrollToBottom();
@@ -121,19 +314,58 @@ export default function ChatPage() {
     e?.preventDefault();
     if (!inputValue.trim() || !selectedContactId || !currentUser || !socketRef.current) return;
 
+    const messageText = inputValue.trim();
+    setInputValue(""); // Clear input immediately
+
     try {
       const sharedKey = generateSharedKey(currentUser._id, selectedContactId);
-      const encrypted = encryptMessage(inputValue, sharedKey);
+      const encrypted = encryptMessage(messageText, sharedKey);
       
-      socketRef.current.emit('send_message', {
+      // Optimistically add message immediately (before server confirms)
+      const tempId = `temp-${Date.now()}-${Math.random()}`;
+      const optimisticMessage: Message = {
+        _id: tempId,
         senderId: currentUser._id,
         receiverId: selectedContactId,
-        encryptedContent: encrypted
+        encryptedContent: encrypted,
+        timestamp: Date.now(),
+        status: 'sent' // Start as 'sent' (grey ticks)
+      };
+      
+      // Add message immediately to UI - this should show right away
+      setMessages(prev => {
+        // Check if temp message already exists to avoid duplicates
+        if (prev.find(m => m._id === tempId)) return prev;
+        return [...prev, optimisticMessage];
       });
       
-      setInputValue("");
+      // Scroll to bottom immediately
+      setTimeout(() => scrollToBottom(), 50);
+      
+      // Send to server via socket
+      if (socketRef.current.connected) {
+        socketRef.current.emit('send_message', {
+          senderId: currentUser._id,
+          receiverId: selectedContactId,
+          encryptedContent: encrypted
+        });
+      } else {
+        // Wait for connection
+        socketRef.current.once('connect', () => {
+          socketRef.current?.emit('send_message', {
+            senderId: currentUser._id,
+            receiverId: selectedContactId,
+            encryptedContent: encrypted
+          });
+        });
+      }
+      
+      // The real message will replace the temp one when 'message_sent' event arrives
     } catch (error) {
+      console.error('Error sending message:', error);
       toast({ variant: "destructive", title: "Error sending message" });
+      // Restore input value on error
+      setInputValue(messageText);
     }
   };
 
@@ -174,6 +406,7 @@ export default function ChatPage() {
     }
     disconnectSocket();
     localStorage.removeItem('currentUser');
+    localStorage.removeItem('authToken'); // Remove JWT token on logout
     setLocation("/auth");
   };
 
@@ -273,6 +506,11 @@ export default function ChatPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between items-baseline">
                       <h3 className="font-medium truncate">{contact.username}</h3>
+                      {contact._id !== selectedContactId && (contact.unreadCount ?? 0) > 0 && (
+                        <span className="ml-2 inline-flex items-center justify-center px-2 py-0.5 rounded-full text-xs font-semibold bg-red-600 text-white min-w-[20px]">
+                          {contact.unreadCount}
+                        </span>
+                      )}
                     </div>
                     <p className="text-sm text-muted-foreground truncate">
                       Click to start chatting
@@ -352,10 +590,12 @@ export default function ChatPage() {
                           {format(msg.timestamp, 'HH:mm')}
                         </span>
                         {isMe && (
-                          <span className={`${msg.status === 'read' ? 'text-blue-500' : 'text-muted-foreground'}`}>
-                            {msg.status === 'sent' && <Check className="h-3 w-3" />}
-                            {msg.status === 'delivered' && <CheckCheck className="h-3 w-3" />}
-                            {msg.status === 'read' && <CheckCheck className="h-3 w-3" />}
+                          <span className="inline-flex items-center">
+                            {msg.status === 'read' ? (
+                              <CheckCheck className="h-3 w-3 text-blue-500" />
+                            ) : (
+                              <CheckCheck className="h-3 w-3 text-muted-foreground" />
+                            )}
                           </span>
                         )}
                       </div>
@@ -401,13 +641,13 @@ export default function ChatPage() {
       ) : (
         <div className="flex-1 hidden md:flex flex-col items-center justify-center bg-muted/10 border-l">
           <div className="max-w-md text-center space-y-4 p-8">
-            <div className="w-64 h-64 mx-auto bg-muted/20 rounded-full flex items-center justify-center mb-6">
-               <img src={chatBg} className="w-48 h-48 opacity-20 object-cover rounded-full" alt="Secure Chat" />
+            <div className="w-64 h-64 mx-auto bg-muted/30 rounded-full flex items-center justify-center mb-6">
+               <img src={chatBg} className="w-48 h-48 opacity-70 object-cover rounded-full" alt="Secure Chat" />
             </div>
             <h1 className="text-3xl font-light text-foreground">SecureChat Web</h1>
             <p className="text-muted-foreground">
-              Send and receive messages without keeping your phone online.<br/>
-              Use SecureChat on up to 4 linked devices and 1 phone.
+              Connect with your contacts and chat securely, your data is safe,secure with us. <br/>
+              All messages are encrypted before they leave your device,chat in web .
             </p>
             <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground mt-8">
               <Lock className="h-3 w-3" />

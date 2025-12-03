@@ -6,6 +6,7 @@ const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
   passwordHash: { type: String, required: true },
   avatar: { type: String, default: '' },
+  gender: { type: String, enum: ['male', 'female'], default: 'male' },
   contacts: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   isOnline: { type: Boolean, default: false },
   lastSeen: { type: Date, default: Date.now },
@@ -36,6 +37,7 @@ export interface IUser {
   email: string;
   passwordHash: string;
   avatar: string;
+  gender?: 'male' | 'female';
   contacts: string[];
   isOnline: boolean;
   lastSeen: Date;

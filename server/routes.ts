@@ -1,8 +1,10 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
+import { Message, User } from "@shared/schema";
 import bcrypt from 'bcryptjs';
 import { Server as SocketIOServer } from 'socket.io';
+import jwt from 'jsonwebtoken';
 
 export async function registerRoutes(
   httpServer: Server,
@@ -40,17 +42,12 @@ export async function registerRoutes(
         // Send to receiver
         io.to(data.receiverId).emit('receive_message', message);
         
-        // Confirm to sender
+        // Confirm to sender (message stays as 'sent' - non-blue until receiver opens chat)
         socket.emit('message_sent', message);
+        console.log(`message_sent -> sender:${data.senderId} id:${message._id}`);
 
-        // Auto-update to delivered if receiver is online
-        const receiver = await storage.getUser(data.receiverId);
-        if (receiver?.isOnline) {
-          setTimeout(async () => {
-            await storage.updateMessageStatus(message._id, 'delivered');
-            io.to(data.senderId).emit('message_status_update', { messageId: message._id, status: 'delivered' });
-          }, 500);
-        }
+        // Don't auto-update to delivered - keep as 'sent' until receiver opens chat
+        // This ensures messages stay non-blue until actually seen
       } catch (error) {
         socket.emit('error', 'Failed to send message');
       }
@@ -65,8 +62,14 @@ export async function registerRoutes(
     });
 
     socket.on('message_read', async (data: { messageId: string, senderId: string }) => {
+      console.log(`message_read received from socket ${socket.id}: messageId=${data.messageId} sender=${data.senderId}`);
       await storage.updateMessageStatus(data.messageId, 'read');
-      io.to(data.senderId).emit('message_status_update', { messageId: data.messageId, status: 'read' });
+      console.log(`emitting read for ${data.messageId} to ${data.senderId} - this will show blue ticks`);
+      // Notify sender that message was read - this shows blue ticks
+      io.to(String(data.senderId)).emit('message_status_update', { 
+        messageId: data.messageId, 
+        status: 'read' 
+      });
     });
 
     socket.on('disconnect', async () => {
@@ -74,12 +77,51 @@ export async function registerRoutes(
       // Find user by socketId and mark offline
       // Note: This requires querying, which might be slow. In production, use Redis for session management.
     });
+
+    // Mark all messages from a contact to this user as read (socket)
+    socket.on('mark_contact_read', async (data: { userId: string, contactId: string }) => {
+      try {
+        const { userId, contactId } = data;
+        console.log(`mark_contact_read received for user=${userId} contact=${contactId}`);
+        
+        // Find all unread messages from this contact to this user
+        const unreadMessages = await Message.find({ 
+          senderId: contactId, 
+          receiverId: userId, 
+          status: { $ne: 'read' } 
+        }).lean();
+        
+        if (unreadMessages.length === 0) {
+          console.log('No unread messages to mark as read');
+          return;
+        }
+        
+        const ids = unreadMessages.map(m => String(m._id));
+        await Message.updateMany({ _id: { $in: ids } }, { status: 'read' });
+        console.log(`Marked ${ids.length} messages as read`);
+
+        // Notify the sender (contact) about each message being read - this shows blue ticks
+        unreadMessages.forEach(m => {
+          try {
+            io.to(String(contactId)).emit('message_status_update', { 
+              messageId: String(m._id), 
+              status: 'read' 
+            });
+            console.log(`Notified ${contactId} that message ${m._id} was read`);
+          } catch (e) {
+            console.error('Failed to emit message_status_update in mark_contact_read', e);
+          }
+        });
+      } catch (e) {
+        console.error('Error in mark_contact_read handler', e);
+      }
+    });
   });
 
   // Auth Routes
   app.post('/api/auth/register', async (req, res) => {
     try {
-      const { username, email, password } = req.body;
+      const { username, email, password, gender } = req.body;
 
       if (!username || !email || !password) {
         return res.status(400).json({ error: 'Missing required fields' });
@@ -96,11 +138,18 @@ export async function registerRoutes(
         return res.status(400).json({ error: 'Username already taken' });
       }
 
-      const user = await storage.createUser(username, email, password);
+      const user = await storage.createUser(username, email, password, gender || 'male');
+      
+      // Generate JWT token
+      const token = jwt.sign(
+        { userId: user._id, email: user.email },
+        process.env.JWT_SECRET || 'my secret',
+        { expiresIn: process.env.JWT_EXPIRY || '2h' }
+      );
       
       // Don't send password hash to client
       const { passwordHash, ...userWithoutPassword } = user;
-      res.json({ user: userWithoutPassword });
+      res.json({ user: userWithoutPassword, token });
     } catch (error) {
       console.error('Registration error:', error);
       res.status(500).json({ error: 'Registration failed' });
@@ -127,8 +176,15 @@ export async function registerRoutes(
 
       await storage.updateUserStatus(user._id, true);
 
+      // Generate JWT token
+      const token = jwt.sign(
+        { userId: user._id, email: user.email },
+        process.env.JWT_SECRET || 'my secret',
+        { expiresIn: process.env.JWT_EXPIRY || '2h' }
+      );
+
       const { passwordHash, ...userWithoutPassword } = user;
-      res.json({ user: userWithoutPassword });
+      res.json({ user: userWithoutPassword, token });
     } catch (error) {
       console.error('Login error:', error);
       res.status(500).json({ error: 'Login failed' });
@@ -205,13 +261,22 @@ export async function registerRoutes(
         return res.status(404).json({ error: 'User not found' });
       }
 
-      // Get full contact details
+      // Get full contact details and unread counts
+      // Deduplicate contact ids in case the DB array has duplicates
+      const uniqueContactIds = Array.from(new Set(user.contacts.map(String)));
       const contacts = await Promise.all(
-        user.contacts.map(async (contactId) => {
+        uniqueContactIds.map(async (contactId) => {
           const contact = await storage.getUser(contactId);
           if (contact) {
             const { passwordHash, ...contactWithoutPassword } = contact;
-            return contactWithoutPassword;
+            // compute unread count (messages sent by contact to this user that are not read)
+            const unreadCount = await Message.countDocuments({
+              senderId: contactId,
+              receiverId: user._id,
+              status: { $ne: 'read' }
+            });
+
+            return { ...contactWithoutPassword, unreadCount };
           }
           return null;
         })
@@ -234,6 +299,31 @@ export async function registerRoutes(
       }
 
       const messages = await storage.getMessages(userId as string, contactId as string);
+
+      // Mark messages received by this user from the contact as 'read'
+      const unread = messages.filter(m => m.receiverId === (userId as string) && m.status !== 'read');
+      if (unread.length > 0) {
+        const ids = unread.map(m => m._id);
+        await Message.updateMany({ _id: { $in: ids } }, { status: 'read' });
+
+        // notify senders about read status for each message - shows blue ticks
+        unread.forEach(m => {
+          try {
+            io.to(String(m.senderId)).emit('message_status_update', { 
+              messageId: String(m._id), 
+              status: 'read' 
+            });
+          } catch (e) {
+            console.error('Failed to emit message_status_update for read message', e);
+          }
+        });
+
+        // update local array statuses before returning
+        messages.forEach(m => {
+          if (ids.includes(m._id)) m.status = 'read';
+        });
+      }
+
       res.json({ messages });
     } catch (error) {
       console.error('Get messages error:', error);

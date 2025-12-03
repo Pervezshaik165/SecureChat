@@ -5,9 +5,11 @@ export interface User {
   username: string;
   email: string;
   avatar: string;
+  gender?: 'male' | 'female';
   contacts: string[];
   isOnline: boolean;
   lastSeen: string;
+  unreadCount?: number;
 }
 
 export interface Message {
@@ -23,11 +25,11 @@ const API_BASE = '/api';
 
 export const api = {
   // Auth
-  async register(username: string, email: string, password: string): Promise<User> {
+  async register(username: string, email: string, password: string, gender: 'male' | 'female' = 'male'): Promise<User> {
     const res = await fetch(`${API_BASE}/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, email, password }),
+      body: JSON.stringify({ username, email, password, gender }),
     });
     
     if (!res.ok) {
@@ -36,6 +38,10 @@ export const api = {
     }
     
     const data = await res.json();
+    // Store JWT token in localStorage
+    if (data.token) {
+      localStorage.setItem('authToken', data.token);
+    }
     return data.user;
   },
 
@@ -52,6 +58,10 @@ export const api = {
     }
     
     const data = await res.json();
+    // Store JWT token in localStorage
+    if (data.token) {
+      localStorage.setItem('authToken', data.token);
+    }
     return data.user;
   },
 

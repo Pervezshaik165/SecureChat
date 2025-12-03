@@ -16,6 +16,7 @@ const authSchema = z.object({
   email: z.string().email("Invalid email address"),
   password: z.string().min(6, "Password must be at least 6 characters"),
   username: z.string().optional(),
+  gender: z.enum(['male', 'female']).optional(),
 });
 
 export default function AuthPage() {
@@ -32,7 +33,7 @@ export default function AuthPage() {
   // Register Form
   const registerForm = useForm<z.infer<typeof authSchema>>({
     resolver: zodResolver(authSchema),
-    defaultValues: { email: "", password: "", username: "" },
+    defaultValues: { email: "", password: "", username: "", gender: 'male' },
   });
 
   async function onLogin(values: z.infer<typeof authSchema>) {
@@ -40,6 +41,7 @@ export default function AuthPage() {
     try {
       const user = await api.login(values.email, values.password);
       localStorage.setItem('currentUser', JSON.stringify(user));
+      // Token is already stored in localStorage by api.login()
       toast({ title: "Welcome back!", description: "Successfully logged in." });
       setLocation("/chat");
     } catch (error) {
@@ -57,8 +59,9 @@ export default function AuthPage() {
     if (!values.username) return;
     setIsLoading(true);
     try {
-      const user = await api.register(values.username, values.email, values.password);
+      const user = await api.register(values.username, values.email, values.password, values.gender || 'male');
       localStorage.setItem('currentUser', JSON.stringify(user));
+      // Token is already stored in localStorage by api.register()
       toast({ title: "Account created", description: "Welcome to SecureChat!" });
       setLocation("/chat");
     } catch (error) {
@@ -77,7 +80,7 @@ export default function AuthPage() {
       <div className="w-full max-w-md space-y-8">
         <div className="flex flex-col items-center text-center space-y-2">
           <div className="h-12 w-12 rounded-xl bg-primary flex items-center justify-center">
-            <LockKeyhole className="h-6 w-6 text-primary-foreground" />
+            <LockKeyhole className="h-6 w-6 text-white" />
           </div>
           <h1 className="text-2xl font-bold tracking-tight text-foreground">SecureChat</h1>
           <p className="text-muted-foreground text-sm">
@@ -178,6 +181,25 @@ export default function AuthPage() {
                           <FormLabel>Password</FormLabel>
                           <FormControl>
                             <Input type="password" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={registerForm.control}
+                      name="gender"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Gender</FormLabel>
+                          <FormControl>
+                            <select
+                              {...field}
+                              className="w-full rounded-md border px-3 py-2 bg-background text-foreground"
+                            >
+                              <option value="male">Male</option>
+                              <option value="female">Female</option>
+                            </select>
                           </FormControl>
                           <FormMessage />
                         </FormItem>

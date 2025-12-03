@@ -13,7 +13,7 @@ async function seedDemoUsers() {
     username: 'alice',
     email: 'alice@test.com',
     passwordHash: await bcrypt.hash('password', 10),
-    avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Alice',
+    avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent('female-alice')}`,
     contacts: [],
     isOnline: false,
     lastSeen: new Date()
@@ -24,7 +24,7 @@ async function seedDemoUsers() {
     username: 'bob',
     email: 'bob@test.com',
     passwordHash: await bcrypt.hash('password', 10),
-    avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Bob',
+    avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent('male-bob')}`,
     contacts: [],
     isOnline: false,
     lastSeen: new Date()
@@ -40,7 +40,7 @@ export interface IStorage {
   getUser(id: string): Promise<IUser | null>;
   getUserByEmail(email: string): Promise<IUser | null>;
   getUserByUsername(username: string): Promise<IUser | null>;
-  createUser(username: string, email: string, password: string): Promise<IUser>;
+  createUser(username: string, email: string, password: string, gender?: 'male' | 'female'): Promise<IUser>;
   searchUsers(query: string, excludeId: string): Promise<IUser[]>;
   addContact(userId: string, contactId: string): Promise<void>;
   updateUserStatus(userId: string, isOnline: boolean, socketId?: string): Promise<void>;
@@ -68,14 +68,14 @@ export class MemoryStorage implements IStorage {
     return null;
   }
 
-  async createUser(username: string, email: string, password: string): Promise<IUser> {
+  async createUser(username: string, email: string, password: string, gender: 'male' | 'female' = 'male'): Promise<IUser> {
     const passwordHash = await bcrypt.hash(password, 10);
     const user: IUser = {
       _id: nanoid(),
       username,
       email,
       passwordHash,
-      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${username}`,
+      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(gender + '-' + username)}`,
       contacts: [],
       isOnline: true,
       lastSeen: new Date()

@@ -46,7 +46,7 @@ export interface IStorage {
   getUser(id: string): Promise<IUser | null>;
   getUserByEmail(email: string): Promise<IUser | null>;
   getUserByUsername(username: string): Promise<IUser | null>;
-  createUser(username: string, email: string, password: string): Promise<IUser>;
+  createUser(username: string, email: string, password: string, gender?: 'male' | 'female'): Promise<IUser>;
   searchUsers(query: string, excludeId: string): Promise<IUser[]>;
   addContact(userId: string, contactId: string): Promise<void>;
   updateUserStatus(userId: string, isOnline: boolean, socketId?: string): Promise<void>;
@@ -71,10 +71,10 @@ export class MongoStorage implements IStorage {
     return await User.findOne({ username }).lean();
   }
 
-  async createUser(username: string, email: string, password: string): Promise<IUser> {
+  async createUser(username: string, email: string, password: string, gender: 'male' | 'female' = 'male'): Promise<IUser> {
     await ensureConnection();
     const passwordHash = await bcrypt.hash(password, 10);
-    const avatar = `https://api.dicebear.com/7.x/avataaars/svg?seed=${username}`;
+    const avatar = `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(gender + '-' + username)}`;
     
     const user = await User.create({
       username,
